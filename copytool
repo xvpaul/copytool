@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+sep=2
+recursive=0
+also_stdout=0
+use_primary=0
+sort_files=1
+
+usage() {
+  cat <<'EOF'
+Usage:
+  copytool [options] [--] [FILES...]
+  copytool [options] [--] GLOB...
+
+Notes:
+  - Globs are expanded by your shell. Example: copytool ./* src/*.go
+  - If no files are provided, defaults to ./*
+
+Options:
+  -r, --recursive     Recurse into given dirs (or '.' if no args) and copy all regular files
+  -n, --newlines N    Number of newlines BETWEEN files (default: 2)
+  -p, --primary       Copy to primary selection (middle-click paste) instead of clipboard
+  -s, --stdout        Also print to terminal while copying
+      --no-sort       Don’t sort (only relevant for --recursive)
+  -h, --help          Show help
+EOF
+}
+
+die() { echo "copytool: $*" >&2; exit 1; }
+
+# Parse flags
+args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -r|--recursive) recursive=1; shift ;;
+    -n|--newlines) shift; [[ $# -gt 0 ]] || die "missing N for --newlines"; sep="$1"; shift ;;
+    -p|--primary) use_primary=1; shift ;;
+    -s|--stdout) also_stdout=1; shift ;;
+    --no-sort) sort_files=0; shift ;;
+    -h|--help) usage; exit 0 ;;
+    --) shift; args+=("$@"); break ;;
+    -*) die "unknown option: $1" ;;
+    *) args+=("$1"); shift ;;
+  esac
+done
+
+command -v wl-copy >/dev/null 2>&1 || die "wl-copy not found. Install: sudo apt install wl-clipboard"
+
+# Build file list
+files=()
+
+if (( recursive )); then
+  # If no args, recurse from current dir
+  if (( ${#args[@]} == 0 )); then
+    args=(.)
+  fi
+
+  if (( sort_files )); then
+    while IFS= read -r -d '' f; do files+=("$f"); done < <(
+      find "${args[@]}" -type f -print0 | sort -z
+    )
+  else
+    while IFS= read -r -d '' f; do files+=("$f"); done < <(
+      find "${args[@]}" -type f -print0
+    )
+  fi
+else
+  # No args => default to ./*
+  if (( ${#args[@]} == 0 )); then
+    shopt -s nullglob
+    args=(./*)
+  fi
+  for f in "${args[@]}"; do
+    [[ -f "$f" ]] && files+=("$f")
+  done
+fi
+
+(( ${#files[@]} > 0 )) || die "no regular files to copy"
+
+emit() {
+  local first=1
+  for f in "${files[@]}"; do
+    if (( first )); then
+      first=0
+    else
+      for ((i=0; i<sep; i++)); do printf '\n'; done
+    fi
+    cat -- "$f"
+  done
+}
+
+wl_args=()
+(( use_primary )) && wl_args+=(--primary)
+
+if (( also_stdout )); then
+  emit | tee /dev/tty | wl-copy "${wl_args[@]}"
+else
+  emit | wl-copy "${wl_args[@]}"
+fi
